@@ -605,7 +605,89 @@ class Script(scripts.Script):
     def is_ui(self, args):
         return args and isinstance(args[0], external_code.ControlNetUnit) and getattr(args[0], 'is_ui', False)
 
+    def prepareControlUnits(self, p):
+        control_groups = []
+        
+        params = {
+            "enabled": True,
+            "module": None,
+            "model": None,
+            "weight": 1.0,
+            "input_image": None,
+            "invert_image": False,
+            "resize_mode": "Scale to Fit (Inner Fit)",
+            "rgbbgr_mode": False,
+            "low_vram": False,
+            "processor_res": 64,
+            "threshold_a": 64,
+            "threshold_b": 64,
+            "guidance_start": 0.0,
+            "guidance_end": 1.0,
+            "guess_mode": False
+        }
+        params.update(p.controlnet[0])
+        print('params', params)
+        # input_image = to_base64_nparray(unit_request.input_image) if unit_request.input_image else None
+        
+        from modules.api.api import decode_base64_to_image
+        def to_base64_nparray(encoding: str):
+            return np.array(decode_base64_to_image(encoding)).astype('uint8')
+
+        input_image = to_base64_nparray(params['input_image']) if params['input_image'] else None
+        # mask = to_base64_nparray(unit_request.mask) if unit_request.mask else None
+    
+    
+        unit = external_code.ControlNetUnit(
+            enabled=params['enabled'],
+            module=params['module'],
+            model=params['model'],
+            weight=params['weight'],
+            image=input_image, # (input_image) or (input_image, mask)
+            invert_image=params['invert_image'],
+            resize_mode=params['resize_mode'],
+            low_vram=params['low_vram'],
+            processor_res=params['processor_res'],
+            threshold_a=params['threshold_a'],
+            threshold_b=params['threshold_b'],
+            guidance_start=params['guidance_start'],
+            guidance_end=params['guidance_end'],
+            guess_mode=params['guess_mode']
+        )
+        
+        unit_attributes = [attr for attr in dir(unit) if not attr.startswith('__')]
+        for attr in unit_attributes:
+            value = getattr(unit, attr)
+            print(attr, ':', value)
+        print("----")
+        control_groups.append(unit)
+    
+        # control_groups.append((
+        #     unit.module, 
+        #     unit.model, 
+        #     (
+        #         unit.enabled,
+        #         unit.module if unit.module is not None else "none",
+        #         unit.model if unit.model is not None else "None",
+        #         unit.weight,
+        #         unit.image,
+        #         unit.invert_image,
+        #         unit.resize_mode,
+        #         unit.rgbbgr_mode,
+        #         unit.low_vram,
+        #         unit.processor_res,
+        #         unit.threshold_a,
+        #         unit.threshold_b,
+        #         unit.guidance_start,
+        #         unit.guidance_end,
+        #         unit.guess_mode
+        #     )                 
+        # ))
+
+        return control_groups
+        
+
     def process(self, p, *args):
+        print("call controlnet process", "is_UI", self.is_ui(args))
         """
         This function is called before processing begins for AlwaysVisible scripts.
         You can modify the processing object (p) here, inject hooks, etc.
@@ -617,6 +699,11 @@ class Script(scripts.Script):
             self.latest_network.restore(unet)
 
         params_group = external_code.get_all_units_from(args)
+        
+        if not self.is_ui(args) and len(p.controlnet) > 0:
+            print("CONTROL NET API CALL", "ACTIVE CONTROLS", len(p.controlnet))
+            params_group = self.prepareControlUnits(p)
+
         enabled_units = []
         if len(params_group) == 0:
             # fill a null group
@@ -643,6 +730,11 @@ class Script(scripts.Script):
                 f"{prefix} Guidance Start": unit.guidance_start,
                 f"{prefix} Guidance End": unit.guidance_end,
             })
+            
+
+            
+        print('enabled_units', enabled_units)
+        print('params_group', params_group)
 
         if len(params_group) == 0 or len(enabled_units) == 0:
            self.latest_network = None
@@ -664,6 +756,7 @@ class Script(scripts.Script):
 
         self.latest_model_hash = p.sd_model.sd_model_hash
         for idx, unit in enumerate(enabled_units):
+            print("idx", idx, unit.module)
             p_input_image = self.get_remote_call(p, "control_net_input_image", None, idx)
             image = image_dict_from_unit(unit)
             if image is not None:
@@ -675,7 +768,7 @@ class Script(scripts.Script):
 
             if unit.low_vram:
                 hook_lowvram = True
-                
+            print("Loading Control Model", unit.module)
             model_net = self.load_control_model(p, unet, unit.model, unit.low_vram)
             model_net.reset()
 
